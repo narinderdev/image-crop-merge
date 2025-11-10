@@ -1,0 +1,17 @@
+# Root dependencies
+node_modules/
+
+# Client artifacts
+client/node_modules/
+client/dist/
+
+# Server artifacts
+server/node_modules/
+
+# Logs
+*.log
+
+# Environment files
+.env
+*.env
+server/.env
