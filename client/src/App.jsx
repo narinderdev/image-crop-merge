@@ -116,10 +116,10 @@ export default function App() {
         // Map selection from canvas space to natural image pixels
         const { sx, sy } = getScale()
         const selNat = {
-            x: Math.round(selection.x * sx),
-            y: Math.round(selection.y * sy),
-            width: Math.round(selection.w * sx),
-            height: Math.round(selection.h * sy),
+            x: selection.x * sx,
+            y: selection.y * sy,
+            width: selection.w * sx,
+            height: selection.h * sy,
         }
         // Create a cropped image Blob client‑side to send along
         const cropBlob = await cropFromCanvas(canvasRef.current, selection)
@@ -190,8 +190,8 @@ export default function App() {
 // Helper: crop selection from the visible canvas to a Blob
 async function cropFromCanvas(canvas, sel) {
     const off = document.createElement('canvas')
-    off.width = Math.max(1, Math.round(sel.w))
-    off.height = Math.max(1, Math.round(sel.h))
+    off.width = Math.max(1, Math.ceil(sel.w))
+    off.height = Math.max(1, Math.ceil(sel.h))
     const ctx = off.getContext('2d')
     ctx.drawImage(canvas, sel.x, sel.y, sel.w, sel.h, 0, 0, off.width,
         off.height)
