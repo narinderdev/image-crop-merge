@@ -23,7 +23,7 @@ permissions:
   id-token: write
 
 env:
-  IMAGE_NAME: image-crop-merge
+  IMAGE_NAME: image-crop-merge-2
   FRONTEND_ENV_FILE: .env.production
   SERVER_ENV_FILE: .env.production
   APP_ENV: production
