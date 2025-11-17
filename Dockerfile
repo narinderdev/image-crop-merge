@@ -41,7 +41,7 @@ WORKDIR /srv
 
 # Environment
 ARG APP_ENV
-ENV NODE_ENV=production
+ENV NODE_ENV=staging
 ENV APP_ENV=${APP_ENV}
 ENV HOST=0.0.0.0
 ENV PORT=8080
