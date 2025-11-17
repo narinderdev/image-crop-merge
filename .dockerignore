@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+docker-compose*.yml
+.git
+.gitignore
+.husky
+.DS_Store
+*.log
+*.env
+.env*
+client/node_modules
+client/.vite
+client/dist
+server/node_modules
+server/dist

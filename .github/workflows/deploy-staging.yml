@@ -1,0 +1,153 @@
+name: Deploy Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Choose deploy to ship latest main or rollback to a previous commit"
+        type: choice
+        options:
+          - deploy
+          - rollback
+        default: deploy
+        required: true
+      release_tag:
+        description: "Optional release tag (defaults to staging-<short-sha>)"
+        required: false
+      rollback_ref:
+        description: "Commit SHA or git ref to redeploy when action=rollback"
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  IMAGE_NAME: image-crop-merge-2
+  FRONTEND_ENV_FILE: .env.staging
+  SERVER_ENV_FILE: .env.staging
+  APP_ENV: staging
+  FRONTEND_BUILD_SCRIPT: build
+
+jobs:
+  deploy:
+    name: Deploy staging
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.action == 'rollback' && inputs.rollback_ref != '' && inputs.rollback_ref || github.sha }}
+
+      - name: Write environment files
+        run: |
+          mkdir -p client server
+
+          cat <<'ENV' > client/${{ env.FRONTEND_ENV_FILE }}
+          ${{ secrets.FRONTEND_ENV_STAGING }}
+          ENV
+
+          cat <<'ENV' > server/${{ env.SERVER_ENV_FILE }}
+          ${{ secrets.SERVER_ENV_STAGING }}
+          ENV
+        shell: bash
+
+      - name: Convert server env file to YAML
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          env_path = Path("server/${{ env.SERVER_ENV_FILE }}")
+          yaml_path = env_path.with_name(env_path.name + ".yaml")
+          blocked_keys = {"PORT", "K_SERVICE", "K_REVISION", "K_CONFIGURATION"}
+
+          lines = []
+          for raw in env_path.read_text().splitlines():
+              raw = raw.strip()
+              if not raw or raw.startswith("#") or "=" not in raw:
+                  continue
+              key, value = raw.split("=", 1)
+              key = key.strip()
+              if key in blocked_keys:
+                  print(f"Skipping reserved Cloud Run key: {key}")
+                  continue
+              value = value.strip().replace('"', '\\"')
+              lines.append(f'{key}: "{value}"')
+
+          yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"Wrote {yaml_path}")
+          PY
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_STAGING_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_STAGING_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_STAGING_PROJECT }}
+          export_default_credentials: true
+
+      - name: Configure Docker auth for Artifact Registry
+        env:
+          GCP_STAGING_ARTIFACT_REPOSITORY: ${{ secrets.GCP_STAGING_ARTIFACT_REPOSITORY }}
+        run: |
+          if [ -z "$GCP_STAGING_ARTIFACT_REPOSITORY" ]; then
+            echo "Missing GCP_STAGING_ARTIFACT_REPOSITORY secret" >&2
+            exit 1
+          fi
+          HOST="${GCP_STAGING_ARTIFACT_REPOSITORY%%/*}"
+          gcloud auth configure-docker "$HOST" --quiet
+        shell: bash
+
+      - name: Build and push application image
+        id: build-image
+        env:
+          GCP_STAGING_ARTIFACT_REPOSITORY: ${{ secrets.GCP_STAGING_ARTIFACT_REPOSITORY }}
+          GCP_STAGING_PROJECT: ${{ secrets.GCP_STAGING_PROJECT }}
+        run: |
+          if [ -z "$GCP_STAGING_ARTIFACT_REPOSITORY" ]; then
+            echo "Missing GCP_STAGING_ARTIFACT_REPOSITORY secret" >&2
+            exit 1
+          fi
+
+          IMAGE_REPOSITORY="$GCP_STAGING_ARTIFACT_REPOSITORY"
+          IMAGE_URI=$IMAGE_REPOSITORY/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+          echo "Building unified app image: $IMAGE_URI"
+          docker build \
+            --build-arg APP_ENV=${{ env.APP_ENV }} \
+            --build-arg FRONTEND_BUILD_SCRIPT=${{ env.FRONTEND_BUILD_SCRIPT }} \
+            -t "$IMAGE_URI" \
+            -f Dockerfile .
+
+          docker push "$IMAGE_URI"
+          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ secrets.GCP_STAGING_SERVICE_API }} \
+            --image ${{ steps.build-image.outputs.image }} \
+            --region ${{ secrets.GCP_STAGING_REGION }} \
+            --project ${{ secrets.GCP_STAGING_PROJECT }} \
+            --env-vars-file server/${{ env.SERVER_ENV_FILE }}.yaml \
+            --quiet
+
+      - name: Tag release
+        if: inputs.action == 'deploy'
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="staging-${GITHUB_SHA:0:7}"
+          fi
+          echo "Creating tag $TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG" --force
